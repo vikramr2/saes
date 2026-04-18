@@ -1,4 +1,6 @@
+import argparse
 import re
+import sys
 import numpy as np
 import pandas as pd
 import requests
@@ -9,7 +11,15 @@ import dash
 from dash import dcc, html, Input, Output, State
 from transformers import AutoTokenizer, AutoModel
 
-from sae import SparseAutoencoder, INPUT_DIM, DICT_SIZE, DEVICE
+from sae_loader import load_sae_acts, EMBEDDINGS_NPY, EMBEDDING_IDS_NPY, DEVICE
+
+# Parse --sae before Dash takes over argv
+parser = argparse.ArgumentParser()
+parser.add_argument("--sae", choices=["custom", "saelens"], default="custom")
+parser.add_argument("--checkpoint", default=None, help="Override checkpoint path")
+args, _ = parser.parse_known_args()
+SAE_TYPE = args.sae
+SAE_CHECKPOINT = args.checkpoint
 
 SPECTER_MODEL = "allenai/specter2_base"
 QUERY_TOP_K = 100
@@ -18,29 +28,14 @@ OLLAMA_MODEL = "deepseek-r1:latest"
 OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
 TOP_K_LABEL = 10
 
-EMBEDDINGS_NPY = "../data/embeddings.npy"
-EMBEDDING_IDS_NPY = "../data/embedding_ids.npy"
-METADATA_CSV = "../data/oc_mini_node_metadata.csv"
-EDGELIST_CSV = "../data/oc_mini_edgelist.csv"
-CHECKPOINT_PATH = "../data/sae_checkpoint.pt"
+DATA_DIR = "data"
+METADATA_CSV = f"{DATA_DIR}/oc_mini_node_metadata.csv"
+EDGELIST_CSV  = f"{DATA_DIR}/oc_mini_edgelist.csv"
 
 MAX_NODES = 100
 
 
-# ── data loading ────────────────────────────────────────────────────────────
-
-def load_model_and_acts():
-    model = SparseAutoencoder(INPUT_DIM, DICT_SIZE).to(DEVICE)
-    model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE))
-    model.eval()
-    raw = np.load(EMBEDDINGS_NPY).astype(np.float32)
-    x = torch.from_numpy(raw)
-    x = x - x.mean(dim=0)
-    x = x / x.norm(dim=1, keepdim=True).mean()
-    with torch.no_grad():
-        _, acts = model(x.to(DEVICE))
-    return acts.cpu().numpy()
-
+# ── data loading ─────────────────────────────────────────────────────────────
 
 def load_graph_and_meta():
     meta = pd.read_csv(METADATA_CSV).set_index("id")
@@ -50,7 +45,7 @@ def load_graph_and_meta():
     return G, meta
 
 
-# ── feature helpers ──────────────────────────────────────────────────────────
+# ── feature helpers ───────────────────────────────────────────────────────────
 
 def nodes_for_feature(feature_idx, acts, paper_ids):
     col = acts[:, feature_idx]
@@ -98,8 +93,6 @@ def label_feature(feature_idx, acts, paper_ids, meta):
     resp = requests.post(OLLAMA_URL, json=payload, timeout=120)
     resp.raise_for_status()
     raw_text = resp.json()["choices"][0]["message"]["content"]
-
-    # Extract <think>...</think> reasoning if present
     think_match = re.search(r"<think>(.*?)</think>", raw_text, re.DOTALL)
     reasoning = think_match.group(1).strip() if think_match else ""
     label = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
@@ -124,26 +117,21 @@ def build_scatter(feature_idx, acts, paper_ids, G, meta):
             title = t[:80] + "…" if len(t) > 80 else t
         hover.append(f"<b>{pid}</b><br>{title}<br>activation: {activation:.3f}<br>active neighbors: {n_active_neighbors}")
 
-    fig = go.Figure(
+    return go.Figure(
         data=go.Scatter(
-            x=node_acts,
-            y=active_neighbor_counts,
-            mode="markers",
+            x=node_acts, y=active_neighbor_counts, mode="markers",
             marker=dict(size=7, color=node_acts, colorscale="Viridis",
                         showscale=True, colorbar=dict(title="Activation"),
                         line=dict(width=0.5, color="#333")),
-            text=hover,
-            hoverinfo="text",
+            text=hover, hoverinfo="text",
         ),
         layout=go.Layout(
             title="Activation vs. active neighbors",
             xaxis=dict(title="Node activation"),
             yaxis=dict(title="# active neighbors"),
-            margin=dict(l=50, r=10, t=40, b=40),
-            hovermode="closest",
+            margin=dict(l=50, r=10, t=40, b=40), hovermode="closest",
         ),
     )
-    return fig
 
 
 def embed_query(text, tokenizer, encoder):
@@ -151,42 +139,32 @@ def embed_query(text, tokenizer, encoder):
                        max_length=512, padding=True).to(DEVICE)
     with torch.no_grad():
         out = encoder(**inputs)
-    vec = out.last_hidden_state[:, 0, :].cpu().float().numpy()
-    return vec[0]
+    return out.last_hidden_state[:, 0, :].cpu().float().numpy()[0]
 
 
 def build_query_histogram(query, embeddings, acts, paper_ids, meta, tokenizer, encoder):
-    # Embed query and find top-K similar papers by cosine similarity
     q_vec = embed_query(query, tokenizer, encoder)
     q_norm = q_vec / (np.linalg.norm(q_vec) + 1e-8)
     emb_norm = embeddings / (np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8)
     sims = emb_norm @ q_norm
     top_k_idx = np.argsort(sims)[::-1][:QUERY_TOP_K]
 
-    # Aggregate SAE activations across top-K papers (mean over active only)
-    top_acts = acts[top_k_idx]                      # [K, DICT_SIZE]
-    mean_acts = top_acts.mean(axis=0)               # [DICT_SIZE]
+    top_acts = acts[top_k_idx]
+    mean_acts = top_acts.mean(axis=0)
 
-    top20_idx = np.argsort(mean_acts)[::-1][:20]
-    active_idx = top20_idx
-    active_vals = mean_acts[active_idx]
+    top10_idx = np.argsort(mean_acts)[::-1][:10]
+    active_vals = mean_acts[top10_idx]
 
     fig = go.Figure(
         data=go.Scatter(
-            x=active_idx.tolist(),
-            y=active_vals.tolist(),
-            mode="markers",
+            x=top10_idx.tolist(), y=active_vals.tolist(), mode="markers",
             marker=dict(
-                symbol="line-ns",
-                size=12,
-                color=active_vals.tolist(),
-                colorscale="Viridis",
-                showscale=True,
-                colorbar=dict(title="Activation"),
+                symbol="line-ns", size=12,
+                color=active_vals.tolist(), colorscale="Viridis",
+                showscale=True, colorbar=dict(title="Activation"),
                 line=dict(width=1.5, color=active_vals.tolist(), colorscale="Viridis"),
             ),
-            hovertext=[f"Feature {i}<br>mean activation: {mean_acts[i]:.4f}"
-                       for i in active_idx],
+            hovertext=[f"Feature {i}<br>mean activation: {mean_acts[i]:.4f}" for i in top10_idx],
             hoverinfo="text",
         ),
         layout=go.Layout(
@@ -198,17 +176,14 @@ def build_query_histogram(query, embeddings, acts, paper_ids, meta, tokenizer, e
         ),
     )
 
-    # Build results table for the top-K papers
     rows = []
     for i in top_k_idx[:10]:
         pid = paper_ids[i]
-        sim = float(sims[i])
         title = meta.loc[pid, "title"] if pid in meta.index else str(pid)
         rows.append(html.Tr([
-            html.Td(f"{sim:.3f}", style={"padding": "4px 8px", "color": "#666"}),
+            html.Td(f"{sims[i]:.3f}", style={"padding": "4px 8px", "color": "#666"}),
             html.Td(title[:100], style={"padding": "4px 8px", "fontSize": "12px"}),
         ]))
-
     table = html.Table(
         [html.Tr([html.Th("Sim", style={"padding": "4px 8px"}),
                   html.Th("Title", style={"padding": "4px 8px"})])] + rows,
@@ -221,11 +196,10 @@ def build_query_histogram(query, embeddings, acts, paper_ids, meta, tokenizer, e
 def build_figure(feature_idx, acts, paper_ids, G, meta, label):
     active_ids, act_col = nodes_for_feature(feature_idx, acts, paper_ids)
     if not active_ids:
-        return go.Figure(), []
-
+        return go.Figure()
     sub = subgraph_for_nodes(G, active_ids)
     if not sub.nodes:
-        return go.Figure(), []
+        return go.Figure()
 
     pos = nx.spring_layout(sub, seed=42, k=0.5)
     active_set = set(active_ids)
@@ -249,12 +223,11 @@ def build_figure(feature_idx, acts, paper_ids, G, meta, label):
             return f"<b>{n}</b><br>{title}<br>activation: {act_map.get(n, 0):.3f}"
         return str(n)
 
-    fig = go.Figure(
+    return go.Figure(
         data=[
             go.Scatter(x=edge_x, y=edge_y, mode="lines",
                        line=dict(width=0.5, color="#888"), hoverinfo="none"),
-            go.Scatter(x=node_x, y=node_y, mode="markers",
-                       hoverinfo="text",
+            go.Scatter(x=node_x, y=node_y, mode="markers", hoverinfo="text",
                        text=[node_label(n) for n in node_ids_list],
                        marker=dict(showscale=True, colorscale="Viridis",
                                    color=node_colors, size=node_sizes,
@@ -269,13 +242,12 @@ def build_figure(feature_idx, acts, paper_ids, G, meta, label):
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         ),
     )
-    return fig
 
 
-# ── Dash app ─────────────────────────────────────────────────────────────────
+# ── startup ───────────────────────────────────────────────────────────────────
 
-print("Loading model and computing activations...")
-ACTS = load_model_and_acts()
+print(f"Loading SAE activations ({SAE_TYPE})...")
+ACTS, DICT_SIZE = load_sae_acts(SAE_TYPE, SAE_CHECKPOINT)
 EMBEDDINGS = np.load(EMBEDDINGS_NPY).astype(np.float32)
 EMBEDDINGS = EMBEDDINGS - EMBEDDINGS.mean(axis=0)
 EMBEDDINGS = EMBEDDINGS / np.linalg.norm(EMBEDDINGS, axis=1, keepdims=True).mean()
@@ -285,13 +257,16 @@ G, META = load_graph_and_meta()
 print("Loading SPECTER2 for query embedding...")
 TOKENIZER = AutoTokenizer.from_pretrained(SPECTER_MODEL)
 ENCODER = AutoModel.from_pretrained(SPECTER_MODEL).to(DEVICE).eval()
-print(f"Ready. {DICT_SIZE} features, {len(PAPER_IDS)} papers, {G.number_of_edges()} edges.")
+print(f"Ready. {DICT_SIZE} features | {len(PAPER_IDS)} papers | {G.number_of_edges()} edges | SAE: {SAE_TYPE}")
+
+
+# ── Dash app ──────────────────────────────────────────────────────────────────
 
 app = dash.Dash(__name__)
 app.layout = html.Div(style={"fontFamily": "sans-serif", "display": "flex",
                               "flexDirection": "column", "height": "100vh",
                               "padding": "12px", "boxSizing": "border-box"}, children=[
-    html.H2("SAE Feature Explorer", style={"margin": "0 0 8px 0"}),
+    html.H2(f"SAE Feature Explorer [{SAE_TYPE}]", style={"margin": "0 0 8px 0"}),
     dcc.Tabs(id="tabs", value="feature-tab", children=[
 
         dcc.Tab(label="Feature Explorer", value="feature-tab", children=[
@@ -320,8 +295,7 @@ app.layout = html.Div(style={"fontFamily": "sans-serif", "display": "flex",
                               style={"minHeight": "260px"}),
                     html.Details([
                         html.Summary("Model reasoning", style={"cursor": "pointer",
-                                                                "fontSize": "13px",
-                                                                "color": "#555"}),
+                                                                "fontSize": "13px", "color": "#555"}),
                         html.Pre(id="reasoning-box", style={
                             "whiteSpace": "pre-wrap", "fontSize": "12px",
                             "background": "#fafafa", "border": "1px solid #ddd",
@@ -347,12 +321,9 @@ app.layout = html.Div(style={"fontFamily": "sans-serif", "display": "flex",
                             "height": "calc(100vh - 140px)"}, children=[
                 dcc.Graph(id="query-hist", style={"flex": "2", "height": "100%"},
                           config={"displayModeBar": False}),
-                html.Div(id="query-table", style={
-                    "flex": "1", "overflowY": "auto", "fontSize": "12px",
-                }),
+                html.Div(id="query-table", style={"flex": "1", "overflowY": "auto"}),
             ]),
         ]),
-
     ]),
 ])
 
@@ -375,8 +346,7 @@ def explore_feature(_, feature_idx):
     network_fig = build_figure(feature_idx, ACTS, PAPER_IDS, G, META, label)
     scatter_fig = build_scatter(feature_idx, ACTS, PAPER_IDS, G, META)
     n_active = int((ACTS[:, feature_idx] > 0).sum())
-    status = f"{n_active} active papers"
-    return network_fig, scatter_fig, f'Feature {feature_idx}: "{label}"', reasoning, status
+    return network_fig, scatter_fig, f'Feature {feature_idx}: "{label}"', reasoning, f"{n_active} active papers"
 
 
 @app.callback(
