@@ -120,7 +120,7 @@ def build_scatter(feature_idx, acts, paper_ids, G, meta):
     return go.Figure(
         data=go.Scatter(
             x=node_acts, y=active_neighbor_counts, mode="markers",
-            marker=dict(size=7, color=node_acts, colorscale="Viridis",
+            marker=dict(size=7, color=node_acts, colorscale="bluered",
                         showscale=True, colorbar=dict(title="Activation"),
                         line=dict(width=0.5, color="#333")),
             text=hover, hoverinfo="text",
@@ -160,9 +160,9 @@ def build_query_histogram(query, embeddings, acts, paper_ids, meta, tokenizer, e
             x=top10_idx.tolist(), y=active_vals.tolist(), mode="markers",
             marker=dict(
                 symbol="line-ns", size=12,
-                color=active_vals.tolist(), colorscale="Viridis",
+                color=active_vals.tolist(), colorscale="bluered",
                 showscale=True, colorbar=dict(title="Activation"),
-                line=dict(width=1.5, color=active_vals.tolist(), colorscale="Viridis"),
+                line=dict(width=1.5, color=active_vals.tolist(), colorscale="bluered"),
             ),
             hovertext=[f"Feature {i}<br>mean activation: {mean_acts[i]:.4f}" for i in top10_idx],
             hoverinfo="text",
@@ -229,7 +229,7 @@ def build_figure(feature_idx, acts, paper_ids, G, meta, label):
                        line=dict(width=0.5, color="#888"), hoverinfo="none"),
             go.Scatter(x=node_x, y=node_y, mode="markers", hoverinfo="text",
                        text=[node_label(n) for n in node_ids_list],
-                       marker=dict(showscale=True, colorscale="Viridis",
+                       marker=dict(showscale=True, colorscale="bluered",
                                    color=node_colors, size=node_sizes,
                                    colorbar=dict(title="Activation"),
                                    line=dict(width=0.5, color="#333"))),
@@ -267,86 +267,22 @@ app.layout = html.Div(style={"fontFamily": "sans-serif", "display": "flex",
                               "flexDirection": "column", "height": "100vh",
                               "padding": "12px", "boxSizing": "border-box"}, children=[
     html.H2(f"SAE Feature Explorer [{SAE_TYPE}]", style={"margin": "0 0 8px 0"}),
-    dcc.Tabs(id="tabs", value="feature-tab", children=[
-
-        dcc.Tab(label="Feature Explorer", value="feature-tab", children=[
-            html.Div(style={"display": "flex", "gap": "8px", "margin": "8px 0"}, children=[
-                dcc.Input(id="feature-input", type="number", min=0, max=DICT_SIZE - 1,
-                          placeholder=f"Feature index (0–{DICT_SIZE - 1})",
-                          debounce=True,
-                          style={"width": "260px", "padding": "6px", "fontSize": "14px"}),
-                html.Button("Explore", id="explore-btn", n_clicks=0,
-                            style={"padding": "6px 16px", "fontSize": "14px"}),
-                html.Span(id="status-text", style={"alignSelf": "center", "color": "#666",
-                                                   "fontSize": "13px"}),
-            ]),
-            html.Div(style={"display": "flex", "flex": "1", "gap": "12px",
-                            "height": "calc(100vh - 140px)"}, children=[
-                dcc.Graph(id="graph", style={"flex": "2", "height": "100%"},
-                          config={"displayModeBar": False}),
-                html.Div(style={"flex": "1", "display": "flex", "flexDirection": "column",
-                                "gap": "8px", "overflowY": "auto"}, children=[
-                    html.Div(id="label-box", style={
-                        "background": "#f0f4ff", "border": "1px solid #bcd",
-                        "borderRadius": "6px", "padding": "10px", "fontSize": "15px",
-                        "fontWeight": "bold",
-                    }),
-                    dcc.Graph(id="scatter", config={"displayModeBar": False},
-                              style={"minHeight": "260px"}),
-                    html.Details([
-                        html.Summary("Model reasoning", style={"cursor": "pointer",
-                                                                "fontSize": "13px", "color": "#555"}),
-                        html.Pre(id="reasoning-box", style={
-                            "whiteSpace": "pre-wrap", "fontSize": "12px",
-                            "background": "#fafafa", "border": "1px solid #ddd",
-                            "borderRadius": "4px", "padding": "8px",
-                            "maxHeight": "300px", "overflowY": "auto",
-                        }),
-                    ], open=False),
-                ]),
-            ]),
-        ]),
-
-        dcc.Tab(label="Query Search", value="query-tab", children=[
-            html.Div(style={"display": "flex", "gap": "8px", "margin": "8px 0"}, children=[
-                dcc.Input(id="query-input", type="text", debounce=True,
-                          placeholder="Enter a research query...",
-                          style={"flex": "1", "padding": "6px", "fontSize": "14px"}),
-                html.Button("Search", id="query-btn", n_clicks=0,
-                            style={"padding": "6px 16px", "fontSize": "14px"}),
-                html.Span(id="query-status", style={"alignSelf": "center", "color": "#666",
-                                                    "fontSize": "13px"}),
-            ]),
-            html.Div(style={"display": "flex", "gap": "12px",
-                            "height": "calc(100vh - 140px)"}, children=[
-                dcc.Graph(id="query-hist", style={"flex": "2", "height": "100%"},
-                          config={"displayModeBar": False}),
-                html.Div(id="query-table", style={"flex": "1", "overflowY": "auto"}),
-            ]),
-        ]),
+    html.Div(style={"display": "flex", "gap": "8px", "margin": "8px 0"}, children=[
+        dcc.Input(id="query-input", type="text", debounce=True,
+                  placeholder="Enter a research query...",
+                  style={"flex": "1", "padding": "6px", "fontSize": "14px"}),
+        html.Button("Search", id="query-btn", n_clicks=0,
+                    style={"padding": "6px 16px", "fontSize": "14px"}),
+        html.Span(id="query-status", style={"alignSelf": "center", "color": "#666",
+                                            "fontSize": "13px"}),
+    ]),
+    html.Div(style={"display": "flex", "flex": "1", "gap": "12px", "minHeight": "0"}, children=[
+        dcc.Graph(id="query-hist", style={"flex": "2", "height": "100%"},
+                  config={"displayModeBar": False}),
+        html.Div(id="query-table", style={"flex": "1", "overflowY": "auto"}),
     ]),
 ])
 
-
-@app.callback(
-    Output("graph", "figure"),
-    Output("scatter", "figure"),
-    Output("label-box", "children"),
-    Output("reasoning-box", "children"),
-    Output("status-text", "children"),
-    Input("explore-btn", "n_clicks"),
-    State("feature-input", "value"),
-    prevent_initial_call=True,
-)
-def explore_feature(_, feature_idx):
-    if feature_idx is None:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, "Enter a feature index."
-    feature_idx = int(feature_idx)
-    label, reasoning = label_feature(feature_idx, ACTS, PAPER_IDS, META)
-    network_fig = build_figure(feature_idx, ACTS, PAPER_IDS, G, META, label)
-    scatter_fig = build_scatter(feature_idx, ACTS, PAPER_IDS, G, META)
-    n_active = int((ACTS[:, feature_idx] > 0).sum())
-    return network_fig, scatter_fig, f'Feature {feature_idx}: "{label}"', reasoning, f"{n_active} active papers"
 
 
 @app.callback(

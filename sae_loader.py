@@ -34,7 +34,7 @@ def _load_custom(checkpoint_path: str):
 
 def _load_saelens(checkpoint_path: str):
     sys.path.insert(0, "model")
-    from train_saelens_sae import TopKSAE
+    from saelens import TopKSAE
     state = torch.load(checkpoint_path, map_location=DEVICE)
     cfg = state["cfg"]
     model = TopKSAE(cfg["d_in"], cfg["d_sae"], cfg["k"]).to(DEVICE)
