@@ -1,4 +1,5 @@
-data/
+data/*
+!data/oc_mini_node_metadata.csv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
