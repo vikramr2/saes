@@ -8,7 +8,7 @@ sys.path.insert(0, "..")
 from model.saelens import TopKSAE, DEVICE
 
 EMBEDDINGS_NPY = "../data/embeddings.npy"
-OUTPUT_PATH = "../data/sota_sae_checkpoint.pt"
+OUTPUT_PATH = "../data/saelens_checkpoint.pt"
 
 INPUT_DIM = 768
 DICT_SIZE = 2048

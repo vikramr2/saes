@@ -24,10 +24,6 @@ SAE_CHECKPOINT = args.checkpoint
 SPECTER_MODEL = "allenai/specter2_base"
 QUERY_TOP_K = 100
 
-OLLAMA_MODEL = "deepseek-r1:latest"
-OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
-TOP_K_LABEL = 10
-
 DATA_DIR = "data"
 METADATA_CSV = f"{DATA_DIR}/oc_mini_node_metadata.csv"
 EDGELIST_CSV  = f"{DATA_DIR}/oc_mini_edgelist.csv"
@@ -61,42 +57,6 @@ def subgraph_for_nodes(G, node_ids):
         neighbors.update(G.predecessors(n))
         neighbors.update(G.successors(n))
     return G.subgraph(list(neighbors)[:MAX_NODES * 3]).copy()
-
-
-def label_feature(feature_idx, acts, paper_ids, meta):
-    col = acts[:, feature_idx]
-    order = np.argsort(col)[::-1]
-    top_indices = order[col[order] > 0][:TOP_K_LABEL]
-    snippets = []
-    for i in top_indices:
-        pid = paper_ids[i]
-        if pid in meta.index:
-            row = meta.loc[pid]
-            snippets.append(f"{row['title']}: {str(row.get('abstract', ''))}"[:400])
-    if not snippets:
-        return "unknown", ""
-    numbered = "\n\n".join(f"{i+1}. {s}" for i, s in enumerate(snippets))
-    payload = {
-        "model": OLLAMA_MODEL,
-        "messages": [{
-            "role": "user",
-            "content": (
-                "Below are titles and abstracts of scientific papers that all "
-                "strongly activate the same learned feature in a sparse autoencoder.\n\n"
-                f"{numbered}\n\n"
-                "In one short phrase (5 words or fewer), what research topic or theme "
-                "do these papers share? Reply with only the phrase, no explanation."
-            ),
-        }],
-        "temperature": 0.2,
-    }
-    resp = requests.post(OLLAMA_URL, json=payload, timeout=120)
-    resp.raise_for_status()
-    raw_text = resp.json()["choices"][0]["message"]["content"]
-    think_match = re.search(r"<think>(.*?)</think>", raw_text, re.DOTALL)
-    reasoning = think_match.group(1).strip() if think_match else ""
-    label = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
-    return label, reasoning
 
 
 def build_scatter(feature_idx, acts, paper_ids, G, meta):

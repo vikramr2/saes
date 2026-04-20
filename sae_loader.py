@@ -13,7 +13,7 @@ DATA_DIR = "data"
 EMBEDDINGS_NPY = f"{DATA_DIR}/embeddings.npy"
 EMBEDDING_IDS_NPY = f"{DATA_DIR}/embedding_ids.npy"
 CUSTOM_CHECKPOINT = f"{DATA_DIR}/sae_checkpoint.pt"
-SAELENS_CHECKPOINT = f"{DATA_DIR}/sota_sae_checkpoint.pt"
+SAELENS_CHECKPOINT = f"{DATA_DIR}/saelens_checkpoint.pt"
 DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
 
